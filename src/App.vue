@@ -3,12 +3,21 @@ import { ref, onMounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-// 定義裝置資訊結構
 interface BoardInfo {
   hardware_version: number;
   firmware_version: number;
   serial_number: string;
 }
+
+const errorMessage = ref<string | null>(null);
+const actionMessage = ref<string | null>(null);
+
+// 監聽 Rust 傳來的錯誤訊息
+onMounted(() => {
+  listen("error-message", (event) => {
+    errorMessage.value = event.payload as string;
+  });
+});
 
 // 存儲讀取的 Board Info
 const boardInfo = ref<BoardInfo | null>(null);
@@ -22,8 +31,7 @@ async function readBoardInfo() {
     });
     boardInfo.value = response;
   } catch (error) {
-    console.error("讀取 Board Info 錯誤:", error);
-    alert("讀取 Board Info 失敗。");
+    errorMessage.value = `讀取 Board Info 失敗: ${String(error)}`;
   }
 }
 
@@ -33,34 +41,28 @@ async function openCanDevice() {
     const response = await invoke("open_can_device", {
       devType: 4,
       devIndex: 0,
-      can1: 0,
-      can2: 1,
     });
-    alert(response);
-    // ✅ 成功開啟裝置後，自動讀取 Board Info
+    errorMessage.value = response as string;
     await readBoardInfo();
   } catch (error) {
-    console.error("開啟 CAN 裝置錯誤:", error);
-    alert("開啟 CAN 裝置失敗。");
+    errorMessage.value = `開啟 CAN 裝置失敗: ${String(error)}`;
   }
 }
 
-// **關閉 CAN 裝置**
+// 關閉 CAN 裝置
 async function closeCanDevice() {
   try {
     const response = await invoke("stop_can_device", {
       devType: 4,
       devIndex: 0,
     });
-    alert(response);
-    boardInfo.value = null; // ✅ 關閉裝置後清除 Board Info
+    errorMessage.value = response as string;
+    boardInfo.value = null;
   } catch (error) {
-    console.error("關閉 CAN 裝置錯誤:", error);
-    alert("關閉 CAN 裝置失敗。");
+    errorMessage.value = `關閉 CAN 裝置失敗: ${String(error)}`;
   }
 }
 
-// 波特率選項
 const baudRates = [
   { rate: "10 Kbps", timing0: 0x31, timing1: 0x1C },
   { rate: "20 Kbps", timing0: 0x18, timing1: 0x1C },
@@ -83,10 +85,9 @@ const baudRates = [
 
 const selectedBaud = ref(baudRates.find((b) => b.rate === "250 Kbps"));
 
-// 重新連線裝置並設置波特率
 async function reconnectDevice() {
   if (!selectedBaud.value) {
-    alert("請選擇一個波特率。");
+    errorMessage.value = "請選擇一個波特率。";
     return;
   }
   try {
@@ -98,14 +99,23 @@ async function reconnectDevice() {
       timing0: selectedBaud.value.timing0,
       timing1: selectedBaud.value.timing1,
     });
-    alert(response);
+    actionMessage.value = response as string;
   } catch (error) {
     console.error("重新連線 CAN 裝置錯誤:", error);
-    alert("重新連線 CAN 裝置失敗。");
+    errorMessage.value = "重新連線 CAN 裝置失敗。";
   }
 }
 
-// 開始接收 CAN 資料
+
+
+const canData = ref<string>("");
+
+onMounted(() => {
+  listen("can-data", (event) => {
+    canData.value = event.payload as string;
+  });
+});
+
 async function startReceivingData() {
   try {
     await invoke("start_receiving_data", {
@@ -113,117 +123,92 @@ async function startReceivingData() {
       devIndex: 0,
       canChannel: 0,
     });
+    actionMessage.value = "開始接收 CAN 資料...";
   } catch (error) {
-    console.error("開始接收資料錯誤:", error);
-    alert("開始接收資料失敗。");
+    errorMessage.value = `開始接收資料失敗: ${String(error)}`;
   }
 }
 
-// 停止接收 CAN 資料
 async function stopReceivingData() {
   try {
     const response = await invoke("stop_receiving_data");
-    alert(response);
+      actionMessage.value = response as string;
   } catch (error) {
-    console.error("停止接收資料錯誤:", error);
-    alert("停止接收資料失敗。");
+    errorMessage.value = `停止接收資料失敗: ${String(error)}`;
   }
 }
 
-// 存儲接收到的 CAN 數據
-const canData = ref<string>("");
-
-// 監聽 "can-data" 事件
-onMounted(() => {
-  listen("can-data", (event) => {
-    canData.value = event.payload as string;
-  });
-});
+const canMessage = ref<number | null>(null);
+async function transmitCanData() {
+  if (canMessage.value === null) {
+    errorMessage.value = "請輸入要傳送的數據。";
+    return;
+  }
+  try {
+    const response = await invoke("transmit_can_data", {
+      data: canMessage.value,
+      devType: 4,
+      devIndex: 0,
+      canChannel: 0,
+    });
+      actionMessage.value = response as string;
+  } catch (error) {
+    errorMessage.value = `傳送 CAN 數據失敗: ${String(error)}`;
+  }
+}
 </script>
 
 <template>
   <main class="container">
     <h1>CAN 裝置控制</h1>
+    <div v-if="errorMessage" class="error-message">
+      <p><strong>錯誤:</strong> {{ errorMessage }}</p>
+    </div>
+    <div v-if="actionMessage" class="error-message">
+      <p><strong>動作</strong> {{ actionMessage }}</p>
+    </div>
 
-    <!-- 裝置設定 -->
+
     <section>
       <h2>裝置設定</h2>
-      <div class="button-group">
-        <button @click="openCanDevice">開啟 CAN 裝置</button>
-        <button @click="closeCanDevice">關閉 CAN 裝置</button>
-      </div>
+      <button @click="openCanDevice">開啟 CAN 裝置</button>
+      <button @click="closeCanDevice">關閉 CAN 裝置</button>
     </section>
 
-    <!-- 顯示 Board Info -->
-    <section v-if="boardInfo">
-      <h2>裝置資訊</h2>
-      <p><strong>硬體版本：</strong> {{ boardInfo.hardware_version }}</p>
-      <p><strong>固件版本：</strong> {{ boardInfo.firmware_version }}</p>
-      <p><strong>序列號：</strong> {{ boardInfo.serial_number }}</p>
-    </section>
-
-    <!-- 手動讀取 Board Info -->
     <section>
-      <h2>讀取裝置資訊</h2>
-      <button @click="readBoardInfo">手動讀取 Board Info</button>
+      <h2>裝置資訊</h2>
+      <button @click="readBoardInfo">讀取 Board Info</button>
+      <div v-if="boardInfo">
+        <p><strong>硬體版本：</strong> {{ boardInfo.hardware_version }}</p>
+        <p><strong>固件版本：</strong> {{ boardInfo.firmware_version }}</p>
+        <p><strong>序列號：</strong> {{ boardInfo.serial_number }}</p>
+      </div>
     </section>
 
     <!-- 設定波特率 -->
     <section>
-      <h2>設定並重新連線新波特率</h2>
-      <label for="baud-select">選擇波特率：</label>
-      <select id="baud-select" v-model="selectedBaud">
+      <h2>設定波特率</h2>
+      <select v-model="selectedBaud">
         <option v-for="baud in baudRates" :key="baud.rate" :value="baud">
           {{ baud.rate }}
         </option>
       </select>
-      <button @click="reconnectDevice">設定 & 重新連線</button>
+      <button @click="reconnectDevice">設定</button>
     </section>
 
-    <!-- CAN 資料接收 -->
+    <!-- 資料傳送 -->
     <section>
-      <h2>CAN 資料接收</h2>
-      <button @click="startReceivingData">開始接收資料</button>
-      <button @click="stopReceivingData">停止接收資料</button>
+      <h2>傳送 CAN 資料</h2>
+      <input v-model.number="canMessage" type="number" placeholder="輸入數據" />
+      <button @click="transmitCanData">傳送</button>
+    </section>
+
+    <!-- 資料接收 -->
+    <section>
+      <h2>接收 CAN 資料</h2>
+      <button @click="startReceivingData">開始接收</button>
+      <button @click="stopReceivingData">停止接收</button>
       <p>{{ canData }}</p>
     </section>
   </main>
 </template>
-
-<style scoped>
-.container {
-  margin: 0;
-  padding-top: 10vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  text-align: center;
-}
-section {
-  margin-bottom: 1rem;
-}
-.button-group {
-  display: flex;
-  gap: 10px;
-  justify-content: center;
-}
-input,
-select,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-  margin: 0.5em;
-  cursor: pointer;
-}
-button:hover {
-  border-color: #396cd8;
-}
-</style>
